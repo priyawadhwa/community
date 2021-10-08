@@ -23,21 +23,14 @@ tags, and then generate with `hack/update-toc.sh`.
 - [Summary](#summary)
 - [Motivation](#motivation)
   - [Goals](#goals)
-  - [Non-Goals](#non-goals)
-  - [Use Cases (optional)](#use-cases-optional)
-- [Requirements](#requirements)
 - [Proposal](#proposal)
-  - [Notes/Caveats (optional)](#notescaveats-optional)
   - [Risks and Mitigations](#risks-and-mitigations)
-  - [User Experience (optional)](#user-experience-optional)
-  - [Performance (optional)](#performance-optional)
 - [Design Details](#design-details)
+  - [Requesting an SVID/Signature from the Controller Image](#requesting-an-svidsignature-from-the-controller-image)
+  - [Enabling SPIRE in Tekton](#enabling-spire-in-tekton)
 - [Test Plan](#test-plan)
-- [Design Evaluation](#design-evaluation)
-- [Drawbacks](#drawbacks)
 - [Alternatives](#alternatives)
 - [Infrastructure Needed (optional)](#infrastructure-needed-optional)
-- [Upgrade &amp; Migration Strategy (optional)](#upgrade--migration-strategy-optional)
 - [References (optional)](#references-optional)
 <!-- /toc -->
 
@@ -72,18 +65,18 @@ We'll also need this feature for Tekton to achieve [SLSA 3](https://slsa.dev/lev
 ## Proposal
 The basic design looks like this:
 
-[TODO: insert diagram here]
+1. User installs SPIRE capabilities into Tekton (details discussed below)
+1. Pipelines controller creates a Pod for a new TaskRun per usual
+1. Pipelines requests a signature from SPIRE over the TaskRun yaml
+1. SPIRE returns signature and SVID x509 Certificate for the TaskRun
+1. Pipelines stores the signature and SVID on the TaskRun as an annotation
 
-1. Entrypoint image creates a Pod for a new TaskRun
-1. Entrypoint image is modified to request a signature from SPIRE over the TaskRun yaml
-1. Entrypointer needs to make the following available to Chains:
-- The SVID x509 certificate from SPIRE
-- The signature from SPIRE
 
 Then, Chains gets the TaskRun.
 Chains will:
 1. Verify the signature against the SPIRE x509 certificate
-1. Continue signing stuff! 
+1. If verification fails, Chains will mark the TaskRun as "failed" and move on
+1. Otherwise, continue signing stuff! 
 
 
 <!--
@@ -96,58 +89,55 @@ nitty-gritty.
 
 ### Risks and Mitigations
 
-Results might not be big enough to store the info we want to send.
+Annotations might not be big enough to store the info we want to send.
 
 ## Design Details
 
+### Requesting an SVID/Signature from the Controller Image
 
+We could add a flag to the controller image, `--validate-spire=true`, which would tell the controller image to request an SVID & signature from SPIRE.
 
-<!--
-This section should contain enough information that the specifics of your
-change are understandable.  This may include API specs (though not always
-required) or even code snippets.  If there's any ambiguity about HOW your
-proposal will be implemented, this is the place to discuss them.
+### Enabling SPIRE in Tekton
+SPIRE runs as a Unix domain socket on the k8s node.
+For Tekton to interact with SPIRE, we would need to make the following changes to the controller deployment:
+1. Mount in the SPIRE socket as a volume of type `hostPath`
+1. Pass in the `--validate-spire=true` flag to the controller image
 
-If it's helpful to include workflow diagrams or any other related images,
-add them under "/teps/images/". It's upto the TEP author to choose the name
-of the file, but general guidance is to include at least TEP number in the
-file name, for example, "/teps/images/NNNN-workflow.jpg".
--->
+This volume mount would look something like this on the Tekton controller:
+
+```
+containers:
+- name: tekton-pipelines-controller
+  volumeMounts:
+  - name: spire
+    mountPath: /run/spire/sockets/agent.sock
+volumes:
+- name: spire
+  hostPath:
+    path: /run/spire/sockets/agent.sock
+```
+
+We could write a TaskRun that would be responsible for making the above changes to the controller.
+The code for this TaskRun could live in the Chains repo, and be released as part of Chains releases.
 
 ## Test Plan
+Tests should cover the entire flow mentioned above including:
+1. Enabling SPIRE in Tekton with the installation `TaskRun`
+1. Requesting an SVID & signature for a TaskRun in the controller
+1. Storing those as annotations on the TaskRun
+1. Verification of SPIRE with Chains  
 
-We'll probably need a persistent k8s cluster with SPIRE installed to run tests against.
 
-
-## Drawbacks
-
-<!--
-Why should this TEP _not_ be implemented?
--->
 
 ## Alternatives
 
-<!--
-What other approaches did you consider and why did you rule them out?  These do
-not need to be as detailed as the proposal, but should include enough
-information to express the idea and why it was not acceptable.
--->
+We could also look into other ways of preventing tampering of Tasks.
+As of now I don't know of any other alternatives would work.
 
 ## Infrastructure Needed (optional)
+We'll probably need a persistent k8s cluster with SPIRE installed to run tests against.
 
-<!--
-Use this section if you need things from the project/SIG.  Examples include a
-new subproject, repos requested, github details.  Listing these here allows a
-SIG to get the process for these resources started right away.
--->
 
-## Upgrade & Migration Strategy (optional)
-
-<!--
-Use this section to detail wether this feature needs an upgrade or
-migration strategy. This is especially useful when we modify a
-behavior or add a feature that may replace and deprecate a current one.
--->
 
 ## References (optional)
 
